@@ -1,11 +1,22 @@
 ---
 name: clone-website
-description: Reverse-engineer and clone one or more websites in one shot — extracts assets, CSS, and content section-by-section and proactively dispatches parallel builder agents in worktrees as it goes. Use this whenever the user wants to clone, replicate, rebuild, reverse-engineer, or copy any website. Also triggers on phrases like "make a copy of this site", "rebuild this page", "pixel-perfect clone". Provide one or more target URLs as arguments.
-argument-hint: "<url1> [<url2> ...]"
+description: Reverse-engineer and clone one or more websites in one shot — extracts assets, CSS, and content section-by-section and proactively dispatches parallel builder agents in worktrees as it goes. Use this whenever the user wants to clone, replicate, rebuild, reverse-engineer, or copy any website. Also triggers on phrases like "make a copy of this site", "rebuild this page", "pixel-perfect clone". Provide one or more target URLs as arguments. Optionally add --output=elementor to build the clone as a fully editable Elementor/WordPress page instead of Next.js.
+argument-hint: "[--output=elementor] <url1> [<url2> ...]"
 user-invocable: true
 ---
 
 # Clone Website
+
+## Output Mode Detection
+
+Parse `$ARGUMENTS` first. If it contains `--output=elementor`, set **OUTPUT_MODE = elementor** and strip that flag from the URL list. Otherwise, **OUTPUT_MODE = nextjs** (default).
+
+- **nextjs mode** — builds a pixel-perfect Next.js + shadcn/ui clone (original behavior, unchanged)
+- **elementor mode** — clones the site into a fully editable WordPress/Elementor page using native widgets; no React code is produced
+
+The reconnaissance and spec-writing phases are **identical in both modes** — only Phase 2 onward diverges. Read the relevant phase sections for your active mode.
+
+---
 
 You are about to reverse-engineer and rebuild **$ARGUMENTS** as pixel-perfect clones.
 
@@ -22,15 +33,34 @@ The target is whatever page `$ARGUMENTS` resolves to. Clone exactly what's visib
 - **Out of scope:** Real backend / database, authentication, real-time features, SEO optimization, accessibility audit
 - **Customization:** None — pure emulation
 
+**Elementor mode fidelity note:** Full pixel-perfect parity is not achievable in Elementor. The goal is a structurally faithful, fully editable page — Elementor's flexbox container model is the ceiling. Complex CSS animations, scroll-driven behaviors, and parallax effects are documented in specs but approximated in the build. The user gets an editable page, not a static export.
+
 If the user provides additional instructions (specific fidelity level, customizations, extra context), honor those over the defaults.
 
 ## Pre-Flight
 
+### Both modes
+
 1. **Browser automation is required.** Check for available browser MCP tools (Chrome MCP, Playwright MCP, Browserbase MCP, Puppeteer MCP, etc.). Use whichever is available — if multiple exist, prefer Chrome MCP. If none are detected, ask the user which browser tool they have and how to connect it. This skill cannot work without browser automation.
-2. Parse `$ARGUMENTS` as one or more URLs. Normalize and validate each URL; if any are invalid, ask the user to correct them before proceeding. For each valid URL, verify it is accessible via your browser MCP tool.
-3. Verify the base project builds: `npm run build`. The Next.js + shadcn/ui + Tailwind v4 scaffold should already be in place. If not, tell the user to set it up first.
-4. Create the output directories if they don't exist: `docs/research/`, `docs/research/components/`, `docs/design-references/`, `scripts/`. For multiple clones, also prepare per-site folders like `docs/research/<hostname>/` and `docs/design-references/<hostname>/`.
-5. When working with multiple sites in one command, optionally confirm whether to run them in parallel (recommended, if resources allow) or sequentially to avoid overload.
+2. Parse `$ARGUMENTS` (after stripping `--output=elementor` if present) as one or more URLs. Normalize and validate each URL; if any are invalid, ask the user to correct them before proceeding. For each valid URL, verify it is accessible via your browser MCP tool.
+3. Create the output directories if they don't exist: `docs/research/`, `docs/research/components/`, `docs/design-references/`, `scripts/`. For multiple clones, also prepare per-site folders like `docs/research/<hostname>/` and `docs/design-references/<hostname>/`.
+4. When working with multiple sites in one command, optionally confirm whether to run them in parallel (recommended, if resources allow) or sequentially to avoid overload.
+
+### Next.js mode only
+
+5. Verify the base project builds: `npm run build`. The Next.js + shadcn/ui + Tailwind v4 scaffold should already be in place. If not, tell the user to set it up first.
+
+### Elementor mode only
+
+5. **Verify Elementor MCP is connected.** Check that tools beginning with `mcp__elementor__elementor-mcp-*` are available. If not, tell the user to run the setup wizard first:
+   ```bash
+   bash ~/.claude/scripts/setup-elementor-mcp.sh
+   ```
+   Then quit and reopen Claude Code in the project directory so `.mcp.json` is picked up.
+6. Run a smoke test to confirm auth and see the current site state:
+   - `mcp__elementor__elementor-mcp-list-pages` — confirms auth + lists existing pages
+   - `mcp__elementor__elementor-mcp-get-global-settings` — current colors/fonts kit
+7. **Note on assets:** Downloaded images cannot live in `public/` for WordPress. You will upload them to the WordPress media library via WP-CLI or WP Admin → Media → Add New during Phase 2. Keep track of every image URL and its resulting WordPress attachment ID — you'll need the IDs for `add-image` widget calls.
 
 ## Guiding Principles
 
@@ -38,7 +68,7 @@ These are the truths that separate a successful clone from a "close enough" mess
 
 ### 1. Completeness Beats Speed
 
-Every builder agent must receive **everything** it needs to do its job perfectly: screenshot, exact CSS values, downloaded assets with local paths, real text content, component structure. If a builder has to guess anything — a color, a font size, a padding value — you have failed at extraction. Take the extra minute to extract one more property rather than shipping an incomplete brief.
+Every builder agent (Next.js) or widget-build sequence (Elementor) must receive **everything** it needs to do its job perfectly: screenshot, exact CSS values, downloaded assets with local paths, real text content, component structure. If a builder has to guess anything — a color, a font size, a padding value — you have failed at extraction. Take the extra minute to extract one more property rather than shipping an incomplete brief.
 
 ### 2. Small Tasks, Perfect Results
 
@@ -50,13 +80,13 @@ Look at each section and judge its complexity. A simple banner with a heading an
 
 ### 3. Real Content, Real Assets
 
-Extract the actual text, images, videos, and SVGs from the live site. This is a clone, not a mockup. Use `element.textContent`, download every `<img>` and `<video>`, extract inline `<svg>` elements as React components. The only time you generate content is when something is clearly server-generated and unique per session.
+Extract the actual text, images, videos, and SVGs from the live site. This is a clone, not a mockup. Use `element.textContent`, download every `<img>` and `<video>`, extract inline `<svg>` elements. The only time you generate content is when something is clearly server-generated and unique per session.
 
 **Layered assets matter.** A section that looks like one image is often multiple layers — a background watercolor/gradient, a foreground UI mockup PNG, an overlay icon. Inspect each container's full DOM tree and enumerate ALL `<img>` elements and background images within it, including absolutely-positioned overlays. Missing an overlay image makes the clone look empty even if the background is correct.
 
 ### 4. Foundation First
 
-Nothing can be built until the foundation exists: global CSS with the target site's design tokens (colors, fonts, spacing), TypeScript types for the content structures, and global assets (fonts, favicons). This is sequential and non-negotiable. Everything after this can be parallel.
+Nothing can be built until the foundation exists: global colors, fonts, and assets. This is sequential and non-negotiable. Everything after this can be parallel (Next.js) or section-by-section (Elementor).
 
 ### 5. Extract How It Looks AND How It Behaves
 
@@ -109,15 +139,23 @@ For scroll-dependent elements:
 
 ### 8. Spec Files Are the Source of Truth
 
-Every component gets a specification file in `docs/research/components/` BEFORE any builder is dispatched. This file is the contract between your extraction work and the builder agent. The builder receives the spec file contents inline in its prompt — the file also persists as an auditable artifact that the user (or you) can review if something looks wrong.
+Every component gets a specification file in `docs/research/components/` BEFORE any builder is dispatched (Next.js) or widget sequence begins (Elementor). This file is the contract between your extraction work and the build phase. The file persists as an auditable artifact that the user (or you) can review if something looks wrong.
 
-The spec file is not optional. It is not a nice-to-have. If you dispatch a builder without first writing a spec file, you are shipping incomplete instructions based on whatever you can remember from a browser MCP session, and the builder will guess to fill gaps.
+The spec file is not optional. It is not a nice-to-have. If you start building without first writing a spec file, you are working from memory, and you will guess to fill gaps.
 
-### 9. Build Must Always Compile
+### 9. Next.js: Build Must Always Compile
 
-Every builder agent must verify `npx tsc --noEmit` passes before finishing. After merging worktrees, you verify `npm run build` passes. A broken build is never acceptable, even temporarily.
+*(Next.js mode only)* Every builder agent must verify `npx tsc --noEmit` passes before finishing. After merging worktrees, you verify `npm run build` passes. A broken build is never acceptable, even temporarily.
+
+### 10. Elementor: Default to Native Widgets, Never HTML Blobs
+
+*(Elementor mode only)* **Do NOT paste a whole section as a single HTML widget.** That produces a non-editable static export, which defeats the entire purpose of this output mode. Every section must be built from native Elementor widgets. The HTML widget is reserved for four narrow exceptions only — see the Elementor Anti-Patterns section below.
+
+---
 
 ## Phase 1: Reconnaissance
+
+*(Identical in both modes)*
 
 Navigate to the target URL with browser MCP.
 
@@ -129,13 +167,13 @@ Navigate to the target URL with browser MCP.
 ### Global Extraction
 Extract these from the page before doing anything else:
 
-**Fonts** — Inspect `<link>` tags for Google Fonts or self-hosted fonts. Check computed `font-family` on key elements (headings, body, code, labels). Document every family, weight, and style actually used. Configure them in `src/app/layout.tsx` using `next/font/google` or `next/font/local`.
+**Fonts** — Inspect `<link>` tags for Google Fonts or self-hosted fonts. Check computed `font-family` on key elements (headings, body, code, labels). Document every family, weight, and style actually used.
 
-**Colors** — Extract the site's color palette from computed styles across the page. Update `src/app/globals.css` with the target's actual colors in the `:root` and `.dark` CSS variable blocks. Map them to shadcn's token names (background, foreground, primary, muted, etc.) where they fit. Add custom properties for colors that don't map to shadcn tokens.
+**Colors** — Extract the site's color palette from computed styles across the page. Build a named palette: primary, secondary, accent, background, text, muted, etc. Record exact hex/rgb values.
 
-**Favicons & Meta** — Download favicons, apple-touch-icons, OG images, webmanifest to `public/seo/`. Update `layout.tsx` metadata.
+**Favicons & Meta** — Download favicons, apple-touch-icons, OG images to `docs/design-references/seo/`.
 
-**Global UI patterns** — Identify any site-wide CSS or JS: custom scrollbar hiding, scroll-snap on the page container, global keyframe animations, backdrop filters, gradients used as overlays, **smooth scroll libraries** (Lenis, Locomotive Scroll — check for `.lenis`, `.locomotive-scroll`, or custom scroll container classes). Add these to `globals.css` and note any libraries that need to be installed.
+**Global UI patterns** — Identify any site-wide CSS or JS: custom scrollbar hiding, scroll-snap on the page container, global keyframe animations, backdrop filters, gradients used as overlays, **smooth scroll libraries** (Lenis, Locomotive Scroll — check for `.lenis`, `.locomotive-scroll`, or custom scroll container classes).
 
 ### Mandatory Interaction Sweep
 
@@ -175,7 +213,11 @@ Map out every distinct section of the page from top to bottom. Give each a worki
 
 Save this as `docs/research/PAGE_TOPOLOGY.md` — it becomes your assembly blueprint.
 
+---
+
 ## Phase 2: Foundation Build
+
+### Next.js mode
 
 This is sequential. Do it yourself (not delegated to an agent) since it touches many files:
 
@@ -186,19 +228,17 @@ This is sequential. Do it yourself (not delegated to an agent) since it touches 
 5. **Download global assets** — write and run a Node.js script (`scripts/download-assets.mjs`) that downloads all images, videos, and other binary assets from the page to `public/`. Preserve meaningful directory structure.
 6. Verify: `npm run build` passes
 
-### Asset Discovery Script Pattern
+#### Asset Discovery Script Pattern
 
 Use browser MCP to enumerate all assets on the page:
 
 ```javascript
-// Run this via browser MCP to discover all assets
 JSON.stringify({
   images: [...document.querySelectorAll('img')].map(img => ({
     src: img.src || img.currentSrc,
     alt: img.alt,
     width: img.naturalWidth,
     height: img.naturalHeight,
-    // Include parent info to detect layered compositions
     parentClasses: img.parentElement?.className,
     siblings: img.parentElement ? [...img.parentElement.querySelectorAll('img')].length : 0,
     position: getComputedStyle(img).position,
@@ -226,21 +266,107 @@ JSON.stringify({
 
 Then write a download script that fetches everything to `public/`. Use batched parallel downloads (4 at a time) with proper error handling.
 
-## Phase 3: Component Specification & Dispatch
+---
 
-This is the core loop. For each section in your page topology (top to bottom), you do THREE things: **extract**, **write the spec file**, then **dispatch builders**.
+### Elementor mode
+
+This is sequential. Do it yourself since it touches global site settings:
+
+1. **Download all assets** using the same asset discovery script above, saving to a local `docs/assets/` folder. These will be uploaded to WordPress.
+
+2. **Upload images to WordPress media library.** For a local site (Local by Flywheel), use WP-CLI:
+   ```bash
+   # Upload each image and capture the returned attachment ID
+   wp media import /path/to/image.jpg --title="Hero Background" --porcelain
+   # Returns an integer ID — record it alongside the original URL
+   ```
+   For a live host, upload via WP Admin → Media → Add New. Build a mapping table and save it:
+
+   **`docs/research/ASSET_MAP.md`**
+   ```
+   | Original URL | Local file | WP Attachment ID | WP URL |
+   ```
+   You will need both the attachment ID and the WP URL for Elementor widget calls.
+
+3. **Set global colors** — map the extracted palette to Elementor global colors:
+   ```
+   mcp__elementor__elementor-mcp-update-global-colors({
+     colors: [
+       { id: "primary",    title: "Primary",    value: "#xxxxxx" },
+       { id: "secondary",  title: "Secondary",  value: "#xxxxxx" },
+       { id: "accent",     title: "Accent",     value: "#xxxxxx" },
+       { id: "text",       title: "Text",       value: "#xxxxxx" },
+       { id: "background", title: "Background", value: "#xxxxxx" }
+     ]
+   })
+   ```
+
+4. **Set global typography** — map extracted fonts to Elementor global typography slots:
+   ```
+   mcp__elementor__elementor-mcp-update-global-typography({
+     typography: [
+       {
+         id: "primary",
+         title: "Primary Heading",
+         value: {
+           typography: "custom",
+           font_family: "<extracted font family>",
+           font_weight: "<weight>",
+           font_size: { unit: "px", size: <size> },
+           line_height: { unit: "em", size: <value> }
+         }
+       },
+       {
+         id: "secondary",
+         title: "Body",
+         value: {
+           typography: "custom",
+           font_family: "<extracted font family>",
+           font_weight: "<weight>",
+           font_size: { unit: "px", size: <size> }
+         }
+       }
+     ]
+   })
+   ```
+
+5. **Create the page:**
+   ```
+   mcp__elementor__elementor-mcp-create-page({
+     title: "<site name> Clone",
+     status: "publish",
+     template: "elementor_canvas"
+   })
+   ```
+   Record the returned `post_id` — every subsequent widget call needs it.
+
+6. **(Optional) Set as WordPress front page** via WP-CLI:
+   ```bash
+   wp option update show_on_front page
+   wp option update page_on_front <post_id>
+   ```
+
+7. **Load Elementor container schema** — do this once and note the key names:
+   ```
+   mcp__elementor__elementor-mcp-get-container-schema
+   ```
+   Critical keys to record: `flex_direction`, `flex_justify_content`, `flex_align_items`, `flex_gap`, `flex_wrap`, `content_width`, `boxed_width`, `min_height`, `padding`, `margin`, `background_background`, `background_color`, `background_image`.
+
+---
+
+## Phase 3: Component Specification & Build
 
 ### Step 1: Extract
+
+*(Identical in both modes)*
 
 For each section, use browser MCP to extract everything:
 
 1. **Screenshot** the section in isolation (scroll to it, screenshot the viewport). Save to `docs/design-references/`.
 
-2. **Extract CSS** for every element in the section. Use the extraction script below — don't hand-measure individual properties. Run it once per component container and capture the full output:
+2. **Extract CSS** for every element in the section using this script:
 
 ```javascript
-// Per-component extraction — run via browser MCP
-// Replace SELECTOR with the actual CSS selector for the component
 (function(selector) {
   const el = document.querySelector(selector);
   if (!el) return JSON.stringify({ error: 'Element not found: ' + selector });
@@ -282,26 +408,19 @@ For each section, use browser MCP to extract everything:
 })('SELECTOR');
 ```
 
-3. **Extract multi-state styles** — for any element with multiple states (scroll-triggered, hover, active tab), capture BOTH states:
+3. **Extract multi-state styles** — for any element with multiple states (scroll-triggered, hover, active tab), capture BOTH states. Record the diff explicitly: "Property X changes from VALUE_A to VALUE_B, triggered by TRIGGER, with transition: TRANSITION_CSS."
 
-```javascript
-// State A: capture styles at current state (e.g., scroll position 0)
-// Then trigger the state change (scroll, click, hover via browser MCP)
-// State B: re-run the extraction script on the same element
-// The diff between A and B IS the behavior specification
-```
+4. **Extract real content** — all text, alt attributes, aria labels, placeholder text. For tabbed/stateful content, **click each tab and extract content per state**.
 
-Record the diff explicitly: "Property X changes from VALUE_A to VALUE_B, triggered by TRIGGER, with transition: TRANSITION_CSS."
+5. **Identify assets** this section uses. Check for **layered images** (multiple `<img>` or background-images stacked in the same container).
 
-4. **Extract real content** — all text, alt attributes, aria labels, placeholder text. Use `element.textContent` for each text node. For tabbed/stateful content, **click each tab and extract content per state**.
+6. **Assess complexity** — how many distinct sub-components does this section contain?
 
-5. **Identify assets** this section uses — which downloaded images/videos from `public/`, which icon components from `icons.tsx`. Check for **layered images** (multiple `<img>` or background-images stacked in the same container).
-
-6. **Assess complexity** — how many distinct sub-components does this section contain? A distinct sub-component is an element with its own unique styling, structure, and behavior (e.g., a card, a nav item, a search panel).
+---
 
 ### Step 2: Write the Component Spec File
 
-For each section (or sub-component, if you're breaking it up), create a spec file in `docs/research/components/`. This is NOT optional — every builder must have a corresponding spec file.
+For each section (or sub-component, if breaking it up), create a spec file in `docs/research/components/`. This is NOT optional in either mode.
 
 **File path:** `docs/research/components/<component-name>.spec.md`
 
@@ -311,7 +430,8 @@ For each section (or sub-component, if you're breaking it up), create a spec fil
 # <ComponentName> Specification
 
 ## Overview
-- **Target file:** `src/components/<ComponentName>.tsx`
+- **Target file (Next.js):** `src/components/<ComponentName>.tsx`
+- **Target section (Elementor):** Section N of page post_id <id>
 - **Screenshot:** `docs/design-references/<screenshot-name>.png`
 - **Interaction model:** <static | click-driven | scroll-driven | time-driven>
 
@@ -331,17 +451,14 @@ For each section (or sub-component, if you're breaking it up), create a spec fil
 - color: ...
 - (every relevant property)
 
-### <Child element N>
-...
-
 ## States & Behaviors
 
-### <Behavior name, e.g., "Scroll-triggered floating mode">
-- **Trigger:** <exact mechanism — scroll position 50px, IntersectionObserver rootMargin "-30% 0px", click on .tab-button, hover>
-- **State A (before):** maxWidth: 100vw, boxShadow: none, borderRadius: 0
-- **State B (after):** maxWidth: 1200px, boxShadow: 0 4px 20px rgba(0,0,0,0.1), borderRadius: 16px
+### <Behavior name>
+- **Trigger:** <scroll position 50px | IntersectionObserver | click | hover>
+- **State A (before):** maxWidth: 100vw, boxShadow: none
+- **State B (after):** maxWidth: 1200px, boxShadow: 0 4px 20px rgba(0,0,0,0.1)
 - **Transition:** transition: all 0.3s ease
-- **Implementation approach:** <CSS transition + scroll listener | IntersectionObserver | CSS animation-timeline | etc.>
+- **Elementor approximation:** <closest Elementor equivalent, or "not achievable — document as known gap">
 
 ### Hover states
 - **<Element>:** <property>: <before> → <after>, transition: <value>
@@ -350,37 +467,47 @@ For each section (or sub-component, if you're breaking it up), create a spec fil
 
 ### State: "Featured"
 - Title: "..."
-- Subtitle: "..."
 - Cards: [{ title, description, image, link }, ...]
 
-### State: "Productivity"
-- Title: "..."
-- Cards: [...]
-
 ## Assets
-- Background image: `public/images/<file>.webp`
-- Overlay image: `public/images/<file>.png`
-- Icons used: <ArrowIcon>, <SearchIcon> from icons.tsx
+- Background image: original URL | WP attachment ID (Elementor) / `public/images/<file>.webp` (Next.js)
+- Overlay image: original URL | WP attachment ID (Elementor) / `public/images/<file>.png` (Next.js)
 
 ## Text Content (verbatim)
 <All text content, copy-pasted from the live site>
 
 ## Responsive Behavior
 - **Desktop (1440px):** <layout description>
-- **Tablet (768px):** <what changes — e.g., "maintains 2-column, gap reduces to 16px">
-- **Mobile (390px):** <what changes — e.g., "stacks to single column, images full-width">
+- **Tablet (768px):** <what changes>
+- **Mobile (390px):** <what changes>
 - **Breakpoint:** layout switches at ~<N>px
+
+## Elementor Widget Plan
+*(Fill this section only in Elementor mode — map every visual element to a widget)*
+- Outer section container: add-container (flex_direction, padding, background...)
+- Inner content container: add-container (content_width:"boxed", boxed_width:...)
+- Main heading: add-heading (header_size, title_color, typography_*)
+- Body copy: add-text-editor
+- CTA: add-button
+- Image: add-image (WP attachment ID: ...)
+- Card grid: add-container (row, wrap) → duplicate first card N times
+- Tabs: add-tabs
+- Accordion: add-accordion
+- Nav menu: uael-nav-menu widget
+- Known gaps: <list behaviors that cannot be reproduced in Elementor>
 ```
 
-Fill every section. If a section doesn't apply (e.g., no states for a static footer), write "N/A" — but think twice before marking States & Behaviors as N/A. Even a footer might have hover states on links.
+Fill every section. If a section doesn't apply (e.g., no states for a static footer), write "N/A" — but think twice before marking States & Behaviors as N/A.
 
-### Step 3: Dispatch Builders
+---
+
+### Step 3A: Dispatch Builders (Next.js mode)
 
 Based on complexity, dispatch builder agent(s) in worktree(s):
 
 **Simple section** (1-2 sub-components): One builder agent gets the entire section.
 
-**Complex section** (3+ distinct sub-components): Break it up. One agent per sub-component, plus one agent for the section wrapper that imports them. Sub-component builders go first since the wrapper depends on them.
+**Complex section** (3+ distinct sub-components): Break it up. One agent per sub-component, plus one agent for the section wrapper. Sub-component builders go first since the wrapper depends on them.
 
 **What every builder agent receives:**
 - The full contents of its component spec file (inline in the prompt — don't say "go read the spec file")
@@ -392,17 +519,118 @@ Based on complexity, dispatch builder agent(s) in worktree(s):
 
 **Don't wait.** As soon as you've dispatched the builder(s) for one section, move to extracting the next section. Builders work in parallel in their worktrees while you continue extraction.
 
-### Step 4: Merge
+#### Step 4A: Merge (Next.js mode)
 
 As builder agents complete their work:
 - Merge their worktree branches into main
-- You have full context on what each agent built, so resolve any conflicts intelligently
 - After each merge, verify the build still passes: `npm run build`
 - If a merge introduces type errors, fix them immediately
 
 The extract → spec → dispatch → merge cycle continues until all sections are built.
 
+---
+
+### Step 3B: Build in Elementor (Elementor mode)
+
+Unlike Next.js mode, Elementor builds are **sequential** — all widget calls go to one WordPress site and cannot be parallelized. Work section-by-section, top to bottom, following the Page Topology order.
+
+**For each section:**
+
+1. Read the component spec, focusing on the "Elementor Widget Plan" section.
+2. Load only the MCP tool schemas you need for this section via ToolSearch `select:` queries — don't load all 75 tools at once.
+3. Build outer container → inner content container → widgets inside, in that order.
+4. After each section completes, call `mcp__elementor__elementor-mcp-get-page-structure` and verify the nesting before moving on.
+5. Record every `element_id` returned by widget creation calls — needed for cross-widget style overrides.
+
+**Standard section structure:**
+```
+add-container (outer — full width, background, padding)
+  └── add-container (inner — boxed, max-width ~1360px)
+        ├── add-heading
+        ├── add-text-editor
+        ├── add-button
+        └── add-image
+```
+
+**Card grids — use duplication, not HTML:**
+```
+1. Build the first card with native widgets (Container → Image → Heading → Text Editor → Button)
+2. mcp__elementor__elementor-mcp-duplicate-element to copy it N times
+3. mcp__elementor__elementor-mcp-update-element to change copy/image on each duplicate
+4. Wrap all cards in a parent Container: flex_direction:"row", flex_wrap:"wrap"
+```
+
+**Cross-widget style overrides** — when widget controls don't expose a needed property, use a `<style>`-only HTML widget scoped to the element ID:
+```html
+<style>
+.elementor-element-<id> .elementor-tab-title {
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+}
+</style>
+```
+
+**CSS → Elementor parameter translation:**
+
+| Extracted CSS | Elementor parameter |
+|---|---|
+| `padding: 40px 80px` | `padding: {top:40, right:80, bottom:40, left:80, unit:"px", isLinked:false}` |
+| `gap: 40px` | `flex_gap: {size:40, unit:"px"}` |
+| `max-width: 1200px` | `content_width:"boxed", boxed_width:{size:1200, unit:"px"}` |
+| `min-height: 100vh` | `min_height:{size:100, unit:"vh"}` |
+| `background-color: #fff` | `background_background:"classic", background_color:"#ffffff"` |
+| `background-image: url(...)` | `background_background:"classic", background_image:{url:"...", id:<wp_id>}` |
+| `font-family: Inter` | `typography_typography:"custom", typography_font_family:"Inter"` |
+| `font-size: 48px` | `typography_font_size:{size:48, unit:"px"}` |
+| `font-weight: 700` | `typography_font_weight:"700"` |
+| `line-height: 1.2` | `typography_line_height:{size:1.2, unit:"em"}` |
+| `letter-spacing: 0.05em` | `typography_letter_spacing:{size:0.05, unit:"em"}` |
+| `color: #333` (heading) | `title_color:"#333"` |
+| `color: #333` (text editor) | `text_color:"#333"` |
+| `border-radius: 8px` | `border_radius:{size:8, unit:"px"}` |
+| `flex-direction: row` | `flex_direction:"row"` |
+| `justify-content: center` | `flex_justify_content:"center"` |
+| `align-items: center` | `flex_align_items:"center"` |
+| `flex-wrap: wrap` | `flex_wrap:"wrap"` |
+| background overlay opacity | `background_overlay_background:"classic", background_overlay_opacity:{unit:"px", size:0.5}` *(unit is always "px" even for opacity — Elementor quirk)* |
+
+**Always set `typography_typography:"custom"`** before any other `typography_*` key, or they are silently ignored.
+
+**Widget calls use flat params, NOT nested `settings:{}`** — except `add-container` which takes `settings:{}`. Don't generalize from one to the other:
+```js
+// CORRECT for add-heading, add-text-editor, add-button, add-image:
+mcp__elementor__elementor-mcp-add-heading({
+  post_id: 11, parent_id: "abc123",
+  title: "Hello <em>World</em>",
+  header_size: "h1",
+  title_color: "#333",
+  typography_typography: "custom",
+  typography_font_family: "Inter",
+  typography_font_size: {size: 64, unit: "px"}
+})
+
+// WRONG — silently fails:
+mcp__elementor__elementor-mcp-add-heading({
+  post_id: 11, parent_id: "abc123",
+  settings: { title: "Hello", typography_font_family: "Inter" }
+})
+```
+
+**Elementor behaviors that cannot be faithfully reproduced — document each as a known gap:**
+- Scroll-driven animations (IntersectionObserver, parallax) → approximate with Elementor's built-in Entrance Animation
+- Smooth scroll libraries (Lenis, Locomotive Scroll) → not available
+- Scroll-snap → not available
+- CSS `animation-timeline` → not available
+- Elementor Pro features (Theme Builder, Loop Grid, Motion Effects, Popups) → require Pro license
+- Sticky header behavior with style transition → note as gap; basic sticky available in free
+
+Document every gap in `docs/research/ELEMENTOR_GAPS.md` as you encounter them.
+
+---
+
 ## Phase 4: Page Assembly
+
+### Next.js mode
 
 After all sections are built and merged, wire everything together in `src/app/page.tsx`:
 
@@ -412,25 +640,66 @@ After all sections are built and merged, wire everything together in `src/app/pa
 - Implement page-level behaviors: scroll snap, scroll-driven animations, dark-to-light transitions, intersection observers, smooth scroll (Lenis etc.)
 - Verify: `npm run build` passes clean
 
+### Elementor mode
+
+After all sections are built on the page:
+
+1. **Build the header** (if the original has one):
+   - Tell the user to create the WordPress nav menu manually: WP Admin → Appearance → Menus → create "Main" menu. This cannot be done via MCP.
+   - Create the header template:
+     ```
+     mcp__elementor__elementor-mcp-create-page({
+       title: "Site Header",
+       post_type: "elementor-hf",
+       status: "publish"
+     })
+     ```
+   - Set post meta via WP-CLI: `ehf_template_type = "type_header"`, `display-on-canvas = "yes"`
+   - Build layout: logo + UAE Nav Menu widget (`uael-nav-menu`) pointed at "Main" menu + CTA button
+   - Verify in WP Admin → Appearance → Header Footer Builder that display is "Entire Website"
+
+2. **Build the footer** (if the original has one):
+   - Same `post_type:"elementor-hf"`, `ehf_template_type = "type_footer"`
+   - Typical: 4-column container (brand block + link columns) + bottom row for copyright/socials
+
+3. **Final page structure check:**
+   ```
+   mcp__elementor__elementor-mcp-get-page-structure({post_id: <id>})
+   ```
+   Confirm all sections appear in the correct order with correct nesting.
+
+4. **Write `docs/research/ELEMENTOR_GAPS.md`** — list every behavior from the original site that could not be reproduced, with a note on how the user could address it (e.g., "upgrade to Elementor Pro", "add custom CSS in WP Customizer", "use a third-party plugin").
+
+---
+
 ## Phase 5: Visual QA Diff
 
-After assembly, do NOT declare the clone complete. Take side-by-side comparison screenshots:
+### Next.js mode
 
-1. Open the original site and your clone side-by-side (or take screenshots at the same viewport widths)
-2. Compare section by section, top to bottom, at desktop (1440px)
-3. Compare again at mobile (390px)
-4. For each discrepancy found:
-   - Check the component spec file — was the value extracted correctly?
-   - If the spec was wrong: re-extract from browser MCP, update the spec, fix the component
-   - If the spec was right but the builder got it wrong: fix the component to match the spec
-5. Test all interactive behaviors: scroll through the page, click every button/tab, hover over interactive elements
-6. Verify smooth scroll feels right, header transitions work, tab switching works, animations play
+1. Open the original site and your clone side-by-side at desktop (1440px), then mobile (390px)
+2. Compare section by section, top to bottom
+3. For each discrepancy: re-extract from browser MCP if the spec was wrong, or fix the component if the spec was right
+4. Test all interactive behaviors: scroll, click every button/tab, hover over interactive elements
+5. Verify smooth scroll, header transitions, tab switching, animations
+
+### Elementor mode
+
+1. Open the original site and the WordPress preview side-by-side at desktop (1440px)
+2. For each visual discrepancy:
+   - Is it an Elementor limitation? → Add to `ELEMENTOR_GAPS.md`
+   - Is it a wrong parameter? → `mcp__elementor__elementor-mcp-update-element` with corrected value
+   - Is it a missing widget? → Add it with correct params
+3. Check mobile (390px) via browser MCP or WP's mobile preview
+4. Test all click-driven interactions (tabs, accordions, buttons)
+5. Review `ELEMENTOR_GAPS.md` with the user so they understand what's missing and why
 
 Only after this visual QA pass is the clone complete.
 
-## Pre-Dispatch Checklist
+---
 
-Before dispatching ANY builder agent, verify you can check every box. If you can't, go back and extract more.
+## Pre-Dispatch / Pre-Build Checklist
+
+Before dispatching ANY builder agent (Next.js) or starting widget calls for a section (Elementor), verify every box:
 
 - [ ] Spec file written to `docs/research/components/<name>.spec.md` with ALL sections filled
 - [ ] Every CSS value in the spec is from `getComputedStyle()`, not estimated
@@ -441,33 +710,57 @@ Before dispatching ANY builder agent, verify you can check every box. If you can
 - [ ] All images in the section are identified (including overlays and layered compositions)
 - [ ] Responsive behavior is documented for at least desktop and mobile
 - [ ] Text content is verbatim from the site, not paraphrased
-- [ ] The builder prompt is under ~150 lines of spec; if over, the section needs to be split
+- [ ] *(Next.js)* Builder prompt is under ~150 lines of spec; if over, split the section
+- [ ] *(Elementor)* "Elementor Widget Plan" section of the spec is filled — every element mapped to a widget
+
+---
 
 ## What NOT to Do
 
-These are lessons from previous failed clones — each one cost hours of rework:
+- **Don't build click-based tabs when the original is scroll-driven (or vice versa).** Determine the interaction model FIRST by scrolling before clicking. This is the #1 most expensive mistake.
+- **Don't extract only the default state.** Click every tab/pill and capture all states.
+- **Don't miss overlay/layered images.** Check every container's DOM tree for multiple `<img>` elements and positioned overlays.
+- **Don't build mockup components for content that's actually videos/animations.**
+- **Don't approximate CSS values.** Extract exact `getComputedStyle()` values.
+- **Don't skip asset extraction.** Without real images, videos, and fonts, the clone will always look fake.
+- **Don't skip responsive extraction.** Test at 1440, 768, and 390 during extraction.
+- **Don't dispatch builders without a spec file.**
 
-- **Don't build click-based tabs when the original is scroll-driven (or vice versa).** Determine the interaction model FIRST by scrolling before clicking. This is the #1 most expensive mistake — it requires a complete rewrite, not a CSS fix.
-- **Don't extract only the default state.** If there are tabs showing "Featured" on load, click Productivity, Creative, Lifestyle and extract each one's cards/content. If the header changes on scroll, capture styles at position 0 AND position 100+.
-- **Don't miss overlay/layered images.** A background watercolor + foreground UI mockup = 2 images. Check every container's DOM tree for multiple `<img>` elements and positioned overlays.
-- **Don't build mockup components for content that's actually videos/animations.** Check if a section uses `<video>`, Lottie, or canvas before building elaborate HTML mockups of what the video shows.
-- **Don't approximate CSS classes.** "It looks like `text-lg`" is wrong if the computed value is `18px` and `text-lg` is `18px/28px` but the actual line-height is `24px`. Extract exact values.
-- **Don't build everything in one monolithic commit.** The whole point of this pipeline is incremental progress with verified builds at each step.
-- **Don't reference docs from builder prompts.** Each builder gets the CSS spec inline in its prompt — never "see DESIGN_TOKENS.md for colors." The builder should have zero need to read external docs.
-- **Don't skip asset extraction.** Without real images, videos, and fonts, the clone will always look fake regardless of how perfect the CSS is.
-- **Don't give a builder agent too much scope.** If you're writing a builder prompt and it's getting long because the section is complex, that's a signal to break it into smaller tasks.
-- **Don't bundle unrelated sections into one agent.** A CTA section and a footer are different components with different designs — don't hand them both to one agent and hope for the best.
-- **Don't skip responsive extraction.** If you only inspect at desktop width, the clone will break at tablet and mobile. Test at 1440, 768, and 390 during extraction.
-- **Don't forget smooth scroll libraries.** Check for Lenis (`.lenis` class), Locomotive Scroll, or similar. Default browser scrolling feels noticeably different and the user will spot it immediately.
-- **Don't dispatch builders without a spec file.** The spec file forces exhaustive extraction and creates an auditable artifact. Skipping it means the builder gets whatever you can fit in a prompt from memory.
+### Next.js only
 
-## Completion
+- **Don't reference docs from builder prompts.** Each builder gets the CSS spec inline.
+- **Don't build everything in one monolithic commit.**
+- **Don't bundle unrelated sections into one agent.**
+- **Don't forget smooth scroll libraries** (Lenis, Locomotive Scroll).
+
+### Elementor only
+
+- **Don't paste a whole section as a single HTML widget.** The user cannot edit it in Elementor. Break every section into native widgets.
+- **Don't nest `settings:{}` in `add-heading`, `add-text-editor`, `add-button`, `add-image` calls.** Only `add-container` takes `settings:{}`.
+- **Don't forget `typography_typography:"custom"`.** Without this flag, all other typography_* keys are silently ignored.
+- **Don't try to reproduce scroll-driven animations exactly.** Use Elementor's Entrance Animation as approximation and document the gap.
+- **Don't build a header/footer without the HFE or UAE plugin installed.**
+- **Don't skip `ELEMENTOR_GAPS.md`.** The user needs to know what the clone can and cannot do before handover.
+
+---
+
+## Completion Report
 
 When done, report:
+
+### Both modes
 - Total sections built
-- Total components created
-- Total spec files written (should match components)
-- Total assets downloaded (images, videos, SVGs, fonts)
+- Total spec files written (should match sections)
+- Total assets downloaded/uploaded
+
+### Next.js mode
+- Total React components created
 - Build status (`npm run build` result)
 - Visual QA results (any remaining discrepancies)
 - Any known gaps or limitations
+
+### Elementor mode
+- WordPress page URL
+- List of native Elementor widgets used (counts by type)
+- Summary of `docs/research/ELEMENTOR_GAPS.md`
+- Any sections that required HTML widget fallback and the specific reason why
