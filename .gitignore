@@ -48,3 +48,11 @@ next-env.d.ts
 # Local temp files
 temp/
 .mcp.json
+
+# Generated output from clone runs
+docs/research/
+docs/design-references/
+scripts/download-assets.mjs
+
+# Claude local settings
+.claude/settings.json

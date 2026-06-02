@@ -1,6 +1,6 @@
 # AI Website Cloner → Elementor
 
-<a href="https://github.com/Vouanerrio/ai-website-cloner-to-elementor/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
+<a href="https://github.com/rottiecode/ai-website-cloner-to-elementor/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
 
 Clone any website into a **fully editable WordPress/Elementor page** using AI. Point it at a URL, run one command, and watch Claude scrape the site, extract every design token, and build the page directly inside your Elementor editor — section by section, using native widgets you can edit, restyle, and reuse.
 
@@ -63,7 +63,29 @@ It will automatically install the two required MCP plugins from GitHub:
 - [WordPress MCP Adapter](https://github.com/WordPress/mcp-adapter)
 - [MCP Tools for Elementor](https://github.com/msrbuilds/elementor-mcp)
 
-### 3. Restart Claude Code
+### 3. Install a browser MCP (recommended)
+
+For accurate design extraction Claude needs to run JavaScript on the live page via a browser. Without this, it falls back to raw HTML/CSS which misses computed styles, resolved CSS variables, and rendered layout values — resulting in lower design accuracy.
+
+```bash
+npm install -g @modelcontextprotocol/server-puppeteer
+```
+
+Then add it to your `.mcp.json` alongside the elementor server:
+
+```json
+{
+  "mcpServers": {
+    "elementor": { "...": "existing elementor config" },
+    "puppeteer": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer"]
+    }
+  }
+}
+```
+
+### 4. Restart Claude Code
 
 ```bash
 claude
@@ -71,7 +93,7 @@ claude
 
 Approve the `elementor` MCP server when prompted.
 
-### 4. Clone a website to Elementor
+### 5. Clone a website to Elementor
 
 ```bash
 /clone-website --output=elementor https://example.com
